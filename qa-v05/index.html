@@ -343,6 +343,16 @@ if(location.pathname.includes('/qa-v05/')&&new URLSearchParams(location.search).
     let rejected=false;try{await importData(asFile(bad))}catch(e){rejected=true}
     assert(rejected&&(await allFrom(db)).length===count0+1,'bad backup changed records');log('Invalid backup rejected atomically',true);
     await reload();assert(photoPosts().some(p=>p.id===sampleId),'feed not refreshed');log('Photo feed reload',true);
+    const pageURL=location.href;
+    const awaitPop=()=>new Promise((resolve,reject)=>{const t=setTimeout(()=>reject(new Error('popstate timeout')),2500);window.addEventListener('popstate',()=>{clearTimeout(t);resolve()},{once:true})});
+    openOverlay('upload');assert(ui.overlay==='upload'&&!!document.querySelector('#uploadForm'),'upload popup missing');
+    let pop=awaitPop();history.back();await pop;
+    assert(ui.overlay===null&&location.href===pageURL,'browser back left app');log('Android-style Back closes upload only',true);
+    openOverlay('detail','demoB');assert(ui.overlay==='detail','detail missing');
+    pop=awaitPop();history.back();await pop;
+    assert(ui.overlay===null&&location.href===pageURL,'detail back left app');log('Back closes detail viewer only',true);
+    openOverlay('upload');pop=awaitPop();closeOverlay();closeOverlay();await pop;
+    assert(ui.overlay===null&&location.href===pageURL,'double close left app');log('Rapid double close does not navigate away',true);
    }catch(e){log('QA suite execution',false,e.message)}
    finally{for(const id of ids){try{await removePost(id)}catch(e){log('Cleanup '+id,false,e.message)}}
     log('QA posts cleaned',true);saveReport();}
