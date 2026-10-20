@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#005DAA" />
 <meta name="description" content="하남점 상품 검색·A~J 구역 탐색·사진 피드 모바일 커뮤니티" />
-<title>하남점 커뮤니티 · v0.5 모바일 안정화 테스트</title>
+<title>하남점 커뮤니티 · v0.5 QA 격리 테스트</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" href="./icon.svg" type="image/svg+xml">
 <style>
@@ -120,7 +120,7 @@ body.overlay-open{overflow:hidden;touch-action:pan-x pan-y}
 </div>
 <script>
 (()=>{'use strict';
-const BRANCH='hanam', OLD_DB='market-neighbor-prototype-v1', PREVIEW_DB='hanam-mobile-design-preview-v1', STORE='posts';
+const BRANCH='hanam', OLD_DB='hanam-v05-isolated-qa-db', PREVIEW_DB='hanam-v05-isolated-qa-preview', STORE='posts';
 const ZONES=[['A','과일·채소'],['B','베이커리'],['C','냉장·냉동'],['D','일반식품'],['E','생활·주방'],['F','시즌·행사'],['G','정육·수산'],['H','조미료·건식품'],['I','음료·주류'],['J','가전·디지털']];
 const zoneMap=Object.fromEntries(ZONES), zonenames=['ALL',...ZONES.map(([z])=>z)];
 const $=(s,root=document)=>root.querySelector(s), $$=(s,root=document)=>[...root.querySelectorAll(s)];
@@ -293,6 +293,61 @@ try{large=localStorage.getItem('hanam-large-text')==='1'}catch{}
 try{history.replaceState({hanam:true,...ui},'',location.href)}catch{}
 render();(async()=>{try{db=await openDB(OLD_DB,1);storageReady=true;await migratePreview();await reload()}catch(err){console.error(err);toast('기기 저장소에 접근할 수 없습니다. Chrome 또는 삼성 인터넷을 확인해 주세요.')}})();
 if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
+
+// Developer regression tests: QA-only path, isolated IndexedDB name, never production/user database.
+if(location.pathname.includes('/qa-v05/')&&new URLSearchParams(location.search).has('e2e')){
+ (async()=>{
+   const results=[];const log=(name,ok,message='')=>results.push({name,ok,message});
+   const assert=(v,m)=>{if(!v)throw Error(m)};
+   const sampleId='qa-v05-'+Date.now();let ids=[];
+   function sha(buffer){return crypto.subtle.digest('SHA-256',buffer).then(b=>Array.from(new Uint8Array(b),x=>x.toString(16).padStart(2,'0')).join(''))}
+   function saveReport(){
+    const div=document.createElement('div');div.id='qa-results';div.style='background:white;padding:20px;white-space:pre-wrap;border:2px solid navy;margin:20px;';
+    div.innerText='v0.5 격리 QA ('+results.filter(r=>r.ok).length+'/'+results.length+' PASS)\n'+results.map(r=>(r.ok?'PASS ':'FAIL ')+r.name+(r.message?' · '+r.message:'')).join('\n');
+    document.body.appendChild(div);window.__hanamQA=results;
+   }
+   try{
+    for(let i=0;i<100&&!storageReady;i++)await new Promise(r=>setTimeout(r,80));
+    assert(storageReady,'IndexedDB not ready');
+    log('IndexedDB open',true);
+    const dataBytes=new Uint8Array([137,80,78,71,13,10,26,10,1,2,3,4,5,6]);
+    const files=[1,2,3].map(i=>new File([dataBytes,i+''],`qa-${i}.png`,{type:'image/png',lastModified:1729300000000+i}));
+    const row={id:sampleId,branchId:BRANCH,kind:'photo',zone:'B',spot:'B-01',title:'QA photos',text:'QA storage test',createdAt:Date.now(),comments:[],files,classificationHistory:[]};
+    await commitPost(row);ids.push(sampleId);
+    const saved=(await allFrom(db)).find(x=>x.id===sampleId);
+    assert(saved?.files?.length===3,'missing 3 files');
+    for(let i=0;i<3;i++){
+     assert(saved.files[i].name===files[i].name&&saved.files[i].lastModified===files[i].lastModified,'file metadata altered');
+     assert(await sha(await saved.files[i].arrayBuffer())===await sha(await files[i].arrayBuffer()),'original bytes altered');
+    }
+    log('3 files + SHA-256 integrity + metadata',true);
+    await updatePost(sampleId,latest=>({...latest,comments:[...(latest.comments||[]),{body:'QA comment',at:Date.now()}]}));
+    let rec=(await allFrom(db)).find(x=>x.id===sampleId);
+    assert(rec.comments.length===1&&rec.files.length===3,'update lost photo/comment');log('Transactional comment update preserves photos',true);
+    await updatePost(sampleId,latest=>({...latest,zone:'C',spot:'C-02',classificationHistory:[...(latest.classificationHistory||[]),{fromZone:latest.zone,toZone:'C',at:Date.now()}]}));
+    rec=(await allFrom(db)).find(x=>x.id===sampleId);
+    assert(rec.spot==='C-02'&&rec.comments.length===1&&rec.files.length===3,'classification changed content');log('Classification preserves photos/comments',true);
+    db.close();db=await openDB(OLD_DB,1);
+    rec=(await allFrom(db)).find(x=>x.id===sampleId);
+    assert(rec.files.length===3&&rec.comments.length===1,'data lost after db reopen');log('Persist after DB reopen',true);
+    const data=await Promise.all(rec.files.map(async f=>({name:f.name,type:f.type,lastModified:f.lastModified,data:await new Promise((res,rej)=>{let r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f)})})));
+    const backup={format:'market-neighbor-v1',branchId:BRANCH,posts:[{...rec,files:data}]};
+    const asFile=o=>new File([JSON.stringify(o)],'test-backup.json',{type:'application/json'});
+    const count0=(await allFrom(db)).length;
+    await importData(asFile(backup));
+    const after=(await allFrom(db));
+    assert(after.length===count0+1&&after.some(p=>p.id.startsWith('copy-')&&p.title==='QA photos'),'duplicate not preserved');
+    for(const p of after)if(p.id!==sampleId&&p.title==='QA photos')ids.push(p.id);
+    log('JSON restore preserves duplicate as copy',true);
+    const bad=structuredClone(backup);bad.posts[0].comments=[{body:5,at:Date.now()}];
+    let rejected=false;try{await importData(asFile(bad))}catch(e){rejected=true}
+    assert(rejected&&(await allFrom(db)).length===count0+1,'bad backup changed records');log('Invalid backup rejected atomically',true);
+    await reload();assert(photoPosts().some(p=>p.id===sampleId),'feed not refreshed');log('Photo feed reload',true);
+   }catch(e){log('QA suite execution',false,e.message)}
+   finally{for(const id of ids){try{await removePost(id)}catch(e){log('Cleanup '+id,false,e.message)}}
+    log('QA posts cleaned',true);saveReport();}
+ })();
+}
 })();
 
 </script>
