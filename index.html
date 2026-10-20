@@ -98,7 +98,11 @@ const existing=new Set((await allFrom(db)).map(p=>p.id)),ready=[];
 for(const row of data.posts){
   if(!row||!['photo','story'].includes(row.kind)||typeof row.id!=='string'||!row.id||!validDate(row.createdAt))throw Error('백업에 잘못된 게시물이 포함되어 있습니다.');
   if(row.branchId&&row.branchId!==BRANCH)throw Error('다른 지점의 게시물은 가져올 수 없습니다.');
-  const zone=ZONES.some(z=>z[0]===row.zone)?row.zone:'A';let files=[];
+  const zone=row.kind==='photo'?(typeof row.zone==='string'&&row.zone?row.zone:'A'):null;
+  const spot=row.kind==='photo'?(typeof row.spot==='string'&&row.spot?row.spot:zone+'-01'):null;
+  if(row.kind==='photo'&&zoneMap[zone]&&spot&&/^[A-J]-\d{2}$/.test(spot)&&!spotValid(zone,spot))throw Error('다른 구역에 속한 스팟이 있습니다.');
+  if(row.comments!==undefined&&(!Array.isArray(row.comments)||row.comments.some(c=>!c||typeof c.body!=='string'||!validDate(c.at))))throw Error('잘못된 댓글이 포함되어 있습니다.');
+  let files=[];
   if(row.kind==='photo'){
     if(!Array.isArray(row.files)||row.files.length<1||row.files.length>10)throw Error('사진 개수가 올바르지 않습니다.');
     for(const f of row.files){
@@ -107,7 +111,7 @@ for(const row of data.posts){
       files.push(new File([blob],String(f.name||'photo').slice(0,120),{type:blob.type,lastModified:validDate(f.lastModified)?Number(f.lastModified):Date.now()}));
     }
   }
-  const rec={...row,id:row.id,branchId:BRANCH,zone,spot:spotValid(zone,row.spot)?row.spot:zone+'-01',title:String(row.title||'').slice(0,70),text:String(row.text||'').slice(0,800),comments:Array.isArray(row.comments)?row.comments.filter(c=>c&&typeof c.body==='string').slice(0,100).map(c=>({body:c.body.slice(0,250),at:validDate(c.at)?+c.at:Date.now()})):[],files,classificationHistory:Array.isArray(row.classificationHistory)?row.classificationHistory.slice(0,100):[]};
+  const rec={...row,id:row.id,branchId:BRANCH,zone,spot,comments:Array.isArray(row.comments)?row.comments:[],files,classificationHistory:Array.isArray(row.classificationHistory)?row.classificationHistory:[]};
   while(existing.has(rec.id))rec.id='copy-'+uid();existing.add(rec.id);ready.push(rec);
 }
 // One IndexedDB transaction ensures an invalid/failed write never leaves a partial import.
