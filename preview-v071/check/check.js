@@ -32,7 +32,7 @@ async function anon(){
  return result.data.user;
 }
 async function testPhoto(){
- const s=getClient(),user=await anon();let post=null, uploaded=[],published=false;
+ const s=getClient(),user=await anon();let post=null, uploaded=[],published=false,cleanupOk=true;
  try{
  const c=document.createElement('canvas');c.width=32;c.height=32;const cx=c.getContext('2d');cx.fillStyle='#005DAA';cx.fillRect(0,0,32,32);cx.fillStyle='#fff';cx.fillRect(8,8,16,16);
  const blob=await new Promise(resolve=>c.toBlob(resolve,'image/webp',.85));if(!blob||!blob.size)throw Error('WebP 테스트 사진 생성 실패');
@@ -46,10 +46,10 @@ async function testPhoto(){
  const image=await s.storage.from('hanam-photos').createSignedUrl(path,120);if(image.error||!image.data?.signedUrl)throw Error('사진 공개 링크 생성에 실패했습니다: '+(image.error?.message||'unknown'));
  log('✅ 공개 게시글 및 비공개 사진의 서명 링크 조회');
  }finally{
- if(uploaded.length){const clean=await s.storage.from('hanam-photos').remove(uploaded);if(clean.error)log('⚠️ 사진 정리 실패: '+clean.error.message);else log('✅ 임시 사진 제거');}
- if(post){const clean=await s.from('hanam_posts').delete().eq('id',post).eq('author_id',user.id);if(clean.error)log('⚠️ 게시글 정리 실패: '+clean.error.message);else log('✅ 임시 게시글 제거');}
+ if(uploaded.length){const clean=await s.storage.from('hanam-photos').remove(uploaded);if(clean.error){cleanupOk=false;log('⚠️ 사진 정리 실패: '+clean.error.message)}else log('✅ 임시 사진 제거');}
+ if(post){const clean=await s.from('hanam_posts').delete().eq('id',post).eq('author_id',user.id);if(clean.error){cleanupOk=false;log('⚠️ 게시글 정리 실패: '+clean.error.message)}else log('✅ 임시 게시글 제거');}
  }
- if(published){status([['✅','사진 등록부터 공개·정리까지 성공'],['✅','실제 Supabase 저장소 연결 확인']]);log('🎉 사진 전체흐름 점검 완료');}
+ if(published&&cleanupOk){status([['✅','사진 등록부터 공개·정리까지 성공'],['✅','실제 Supabase 저장소 연결 확인']]);log('🎉 사진 전체흐름 점검 완료');}else if(published){status([['⚠️','게시 성공, 테스트 데이터 정리를 확인해 주세요']]);log('⚠️ 테스트 게시물을 관리자 콘솔에서 점검해 주세요.');}
 }
 document.getElementById('connection').addEventListener('click',()=>perform(server));
 document.getElementById('anon').addEventListener('click',()=>perform(anon));
